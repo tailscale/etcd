@@ -25,7 +25,7 @@ import (
 type index interface {
 	Get(key []byte, atRev int64) (rev, created revision, ver int64, err error)
 	Range(key, end []byte, atRev int64) ([][]byte, []revision)
-	Revisions(key, end []byte, atRev int64) []revision
+	Revisions(key, end []byte, atRev int64, limit int) []revision
 	Put(key []byte, rev revision)
 	Tombstone(key []byte, rev revision) error
 	RangeSince(key, end []byte, rev int64) []revision
@@ -88,7 +88,7 @@ func (ti *treeIndex) keyIndex(keyi *keyIndex) *keyIndex {
 	return nil
 }
 
-func (ti *treeIndex) visit(key, end []byte, f func(ki *keyIndex)) {
+func (ti *treeIndex) visit(key, end []byte, f func(ki *keyIndex) bool) {
 	keyi, endi := &keyIndex{key: key}, &keyIndex{key: end}
 
 	ti.RLock()
@@ -98,12 +98,14 @@ func (ti *treeIndex) visit(key, end []byte, f func(ki *keyIndex)) {
 		if len(endi.key) > 0 && !item.Less(endi) {
 			return false
 		}
-		f(item.(*keyIndex))
+		if !f(item.(*keyIndex)) {
+			return false
+		}
 		return true
 	})
 }
 
-func (ti *treeIndex) Revisions(key, end []byte, atRev int64) (revs []revision) {
+func (ti *treeIndex) Revisions(key, end []byte, atRev int64, limit int) (revs []revision) {
 	if end == nil {
 		rev, _, _, err := ti.Get(key, atRev)
 		if err != nil {
@@ -111,10 +113,14 @@ func (ti *treeIndex) Revisions(key, end []byte, atRev int64) (revs []revision) {
 		}
 		return []revision{rev}
 	}
-	ti.visit(key, end, func(ki *keyIndex) {
+	ti.visit(key, end, func(ki *keyIndex) bool {
 		if rev, _, _, err := ki.get(ti.lg, atRev); err == nil {
 			revs = append(revs, rev)
+			if len(revs) == limit {
+				return false
+			}
 		}
+		return true
 	})
 	return revs
 }
@@ -127,11 +133,12 @@ func (ti *treeIndex) Range(key, end []byte, atRev int64) (keys [][]byte, revs []
 		}
 		return [][]byte{key}, []revision{rev}
 	}
-	ti.visit(key, end, func(ki *keyIndex) {
+	ti.visit(key, end, func(ki *keyIndex) bool {
 		if rev, _, _, err := ki.get(ti.lg, atRev); err == nil {
 			revs = append(revs, rev)
 			keys = append(keys, ki.key)
 		}
+		return true
 	})
 	return keys, revs
 }
